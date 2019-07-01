@@ -200,12 +200,22 @@ func BootStrap() {
 	//bootStrap()
 	modelCache.done = true
 }
+
+// create new mysql dbBaser.
+func newdbBaseYotta() dbBaser {
+	b := &dbBase{}
+	b.ins = b
+	return b
+}
+
 func NewOrm() Ormer {
 	BootStrap() // execute only once
 
 	o := &orm{}
 
-	o.alias = &alias{}
+	o.alias = &alias{
+		DbBaser: newdbBaseYotta(),
+	}
 	return o
 }
 
@@ -227,15 +237,17 @@ type dbBase struct {
 	ins dbBaser
 }
 
+var _ dbBaser = new(dbBase)
+
 // execute insert sql dbQuerier with given struct reflect.Value.
 func (d *dbBase) Insert(q dbQuerier, mi *modelInfo, ind reflect.Value, tz *time.Location) (int64, error) {
-	names := make([]string, 0, len(mi.fields.dbcols))
-	values, _, err := d.collectValues(mi, ind, mi.fields.dbcols, false, true, &names, tz)
-	if err != nil {
-		return 0, err
-	}
+	//names := make([]string, 0, len(mi.fields.dbcols))
+	//values, _, err := d.collectValues(mi, ind, mi.fields.dbcols, false, true, &names, tz)
+	//if err != nil {
+	//	return 0, err
+	//}
 
-	id, err := d.InsertValue(q, mi, false, names, values)
+	id, err := d.InsertValue(q, mi, false, []string{"name"}, []interface{}{"value"})
 	if err != nil {
 		return 0, err
 	}
