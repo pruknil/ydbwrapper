@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 )
 
 // field info collection
@@ -113,6 +114,9 @@ func RegisterModelWithPrefix(prefix string, models ...interface{}) {
 }
 
 type orm struct {
+	alias *alias
+	db    dbQuerier
+	isTx  bool
 }
 
 func (orm) Read(md interface{}, cols ...string) error {
@@ -127,10 +131,19 @@ func (orm) ReadOrCreate(md interface{}, col1 string, cols ...string) (bool, int6
 	panic("implement me")
 }
 
-func (orm) Insert(interface{}) (int64, error) {
+func (o *orm) Insert(md interface{}) (int64, error) {
+	mi := &modelInfo{}
+	val := reflect.ValueOf(md)
+	ind := reflect.Indirect(val)
+	//mi, ind := o.getMiInd(md, true)
+	id, err := o.alias.DbBaser.Insert(o.db, mi, ind, o.alias.TZ)
+	if err != nil {
+		return id, err
+	}
 
-	return 0, nil
-//	panic("implement me")
+	//	o.setPk(mi, ind, id)
+
+	return id, nil
 }
 
 func (orm) InsertOrUpdate(md interface{}, colConflitAndArgs ...string) (int64, error) {
@@ -190,93 +203,68 @@ func BootStrap() {
 func NewOrm() Ormer {
 	BootStrap() // execute only once
 
-	o := new(orm)
+	o := &orm{}
 
+	o.alias = &alias{}
 	return o
 }
 
-// Ormer define the orm interface
-type Ormer interface {
-	// read data to model
-	// for example:
-	//	this will find User by Id field
-	// 	u = &User{Id: user.Id}
-	// 	err = Ormer.Read(u)
-	//	this will find User by UserName field
-	// 	u = &User{UserName: "astaxie", Password: "pass"}
-	//	err = Ormer.Read(u, "UserName")
-	Read(md interface{}, cols ...string) error
-	// Like Read(), but with "FOR UPDATE" clause, useful in transaction.
-	// Some databases are not support this feature.
-	ReadForUpdate(md interface{}, cols ...string) error
-	// Try to read a row from the database, or insert one if it doesn't exist
-	ReadOrCreate(md interface{}, col1 string, cols ...string) (bool, int64, error)
-	// insert model data to database
-	// for example:
-	//  user := new(User)
-	//  id, err = Ormer.Insert(user)
-	//  user must be a pointer and Insert will set user's pk field
-	Insert(interface{}) (int64, error)
-	// mysql:InsertOrUpdate(model) or InsertOrUpdate(model,"colu=colu+value")
-	// if colu type is integer : can use(+-*/), string : convert(colu,"value")
-	// postgres: InsertOrUpdate(model,"conflictColumnName") or InsertOrUpdate(model,"conflictColumnName","colu=colu+value")
-	// if colu type is integer : can use(+-*/), string : colu || "value"
-	InsertOrUpdate(md interface{}, colConflitAndArgs ...string) (int64, error)
-	// insert some models to database
-	InsertMulti(bulk int, mds interface{}) (int64, error)
-	// update model to database.
-	// cols set the columns those want to update.
-	// find model by Id(pk) field and update columns specified by fields, if cols is null then update all columns
-	// for example:
-	// user := User{Id: 2}
-	//	user.Langs = append(user.Langs, "zh-CN", "en-US")
-	//	user.Extra.Name = "beego"
-	//	user.Extra.Data = "orm"
-	//	num, err = Ormer.Update(&user, "Langs", "Extra")
-	Update(md interface{}, cols ...string) (int64, error)
-	// delete model in database
-	Delete(md interface{}, cols ...string) (int64, error)
-	// load related models to md model.
-	// args are limit, offset int and order string.
-	//
-	// example:
-	// 	Ormer.LoadRelated(post,"Tags")
-	// 	for _,tag := range post.Tags{...}
-	//args[0] bool true useDefaultRelsDepth ; false  depth 0
-	//args[0] int  loadRelationDepth
-	//args[1] int limit default limit 1000
-	//args[2] int offset default offset 0
-	//args[3] string order  for example : "-Id"
-	// make sure the relation is defined in model struct tags.
-	LoadRelated(md interface{}, name string, args ...interface{}) (int64, error)
+type alias struct {
+	Name string
+	//Driver       DriverType
+	DriverName   string
+	DataSource   string
+	MaxIdleConns int
+	MaxOpenConns int
+	DB           *sql.DB
+	DbBaser      dbBaser
+	TZ           *time.Location
+	Engine       string
+}
 
-	Using(name string) error
-	// begin transaction
-	// for example:
-	// 	o := NewOrm()
-	// 	err := o.Begin()
-	// 	...
-	// 	err = o.Rollback()
-	Begin() error
-	// begin transaction with provided context and option
-	// the provided context is used until the transaction is committed or rolled back.
-	// if the context is canceled, the transaction will be rolled back.
-	// the provided TxOptions is optional and may be nil if defaults should be used.
-	// if a non-default isolation level is used that the driver doesn't support, an error will be returned.
-	// for example:
-	//  o := NewOrm()
-	// 	err := o.BeginTx(context.Background(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
-	//  ...
-	//  err = o.Rollback()
-	BeginTx(ctx context.Context, opts *sql.TxOptions) error
-	// commit transaction
-	Commit() error
-	// rollback transaction
-	Rollback() error
-	// return a raw query seter for raw sql string.
-	// for example:
-	//	 ormer.Raw("UPDATE `user` SET `user_name` = ? WHERE `user_name` = ?", "slene", "testing").Exec()
-	//	// update user testing's name to slene
+// an instance of dbBaser interface/
+type dbBase struct {
+	ins dbBaser
+}
 
-	DBStats() *sql.DBStats
+// execute insert sql dbQuerier with given struct reflect.Value.
+func (d *dbBase) Insert(q dbQuerier, mi *modelInfo, ind reflect.Value, tz *time.Location) (int64, error) {
+	names := make([]string, 0, len(mi.fields.dbcols))
+	values, _, err := d.collectValues(mi, ind, mi.fields.dbcols, false, true, &names, tz)
+	if err != nil {
+		return 0, err
+	}
+
+	id, err := d.InsertValue(q, mi, false, names, values)
+	if err != nil {
+		return 0, err
+	}
+
+	return id, err
+}
+
+// get struct columns values as interface slice.
+func (d *dbBase) collectValues(mi *modelInfo, ind reflect.Value, cols []string, skipAuto bool, insert bool, names *[]string, tz *time.Location) (values []interface{}, autoFields []string, err error) {
+	if names == nil {
+		ns := make([]string, 0, len(cols))
+		names = &ns
+	}
+	values = make([]interface{}, 0, len(cols))
+
+	return
+}
+
+// get one field value in struct column as interface.
+func (d *dbBase) collectFieldValue(mi *modelInfo, fi *fieldInfo, ind reflect.Value, insert bool, tz *time.Location) (interface{}, error) {
+	var value interface{}
+
+	return value, nil
+}
+
+// execute insert sql with given struct and given values.
+// insert the given values, not the field values in struct.
+func (d *dbBase) InsertValue(q dbQuerier, mi *modelInfo, isMulti bool, names []string, values []interface{}) (int64, error) {
+
+	var id int64
+	return id, nil
 }
