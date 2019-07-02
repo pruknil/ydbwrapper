@@ -8,12 +8,17 @@ import (
 
 func main() {
 	o := orm.NewOrm()
-	profile := ydb.Profile{}
-	profile.Age = 30
+	profile := ydb.Profile{
+		Id:   0,
+		Age:  30,
+		User: nil,
+	}
 
-	user := ydb.User{}
-	user.Profile = &profile
-	user.Name = "slene"
+	user := ydb.User{
+		Id:      0,
+		Name:    "slene",
+		Profile: &profile,
+	}
 
 	fmt.Println(o.Insert(profile))
 	fmt.Println(o.Insert(user))

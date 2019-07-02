@@ -108,9 +108,13 @@ func RegisterModelWithPrefix(prefix string, models ...interface{}) {
 		panic(fmt.Errorf("RegisterModelWithPrefix must be run before BootStrap"))
 	}
 
-	//for _, model := range models {
-	//	registerModel(prefix, model, true)
-	//}
+	for _, model := range models {
+		registerModel(prefix, model, true)
+	}
+}
+
+func registerModel(s string, model interface{}, b bool) {
+
 }
 
 type orm struct {
